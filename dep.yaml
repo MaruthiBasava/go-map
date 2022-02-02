@@ -1,0 +1,31 @@
+
+dir: .
+is_dependency: true
+package: psql 
+filename: mapping_gen.go
+struct_tags:
+	db:
+		snake_cake: true
+types:
+	restaurantThumbnail:
+		import_fields_from_dto: RestaurantThumbnailOutput 
+		map_from_domain: true 
+		map_to_domain: true 
+	restaurant:
+	    import_fields_from_dto: RestaurantOutput 
+		map_from_domain: true 
+		map_to_domain: true
+	menuCategory:
+		import_fields_from_dto: MenuCategoryOutput 
+		map_from_domain: true 
+		map_to_domain: true
+	dishThumbnail:
+		map_from_domain: DishThumbnailOutput 
+	menuLayout: 
+		import_fields_from_dto: MenuLayoutOutput 
+		map_from_domain: true 
+		map_to_domain: true
+
+
+
+

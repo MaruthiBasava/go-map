@@ -1,0 +1,72 @@
+
+dir: .
+package: menu 
+filename: mapping_gen.go
+domain_types:
+    RestaurantThumbnail:
+        file: "restaurant.go"
+    Restaurant: 
+        file: "restaurant.go"
+    MenuCategory: 
+        file: "category.go"
+    DishThumbnail:
+        file: "restaurant.go"
+    Dish: 
+        file: "dish.go"
+    MenuCategoryPosition:
+        file: "layout.go"
+    DishPosition:
+        file: "layout.go"
+    MenuLayout:
+        file: "layout.go"
+
+dto_suffix: "Output"
+map_from_func: "{Map{domain_type}From}"
+map_to_func: "MapTo{suffix}"
+domain_dto_types:
+    RestaurantThumbnail:
+        is_aggregate_root: false
+    Restaurant:
+        is_aggregate_root: true 
+        map_to_domain_from_dto: true
+        map_to_dto_from_domain: true
+        ignore_domain_fields:
+            - removedThumbnailIDs
+    MenuCategory:
+        is_aggregate_root: true 
+        map_to_domain_from_dto: true
+        map_to_dto_from_domain: true
+    DishThumbnail:
+        is_aggregate_root: false
+    Dish:
+        is_aggregate_root: true 
+        map_to_domain_from_dto: true
+        map_to_dto_from_domain: true
+        ignore_domain_fields:
+            - removedThumbnailIDs
+    MenuCategoryPosition:
+        is_aggregate_root: false 
+        NewMenuCategoryPosition:
+            is_init_func: true 
+            param_mapping:
+                - restaurantID
+                - menuCategoryID
+                - position
+    DishPosition:
+        is_aggregate_root: false 
+        NewDishPosition:
+            is_init_func: true
+            param_mapping: 
+                - menuCategoryID
+                - dishID 
+                - position
+    MenuLayout:
+        is_aggregate_root: true 
+        map_to_domain_from_dto: true
+        map_to_dto_from_domain: true
+
+
+
+
+
+
