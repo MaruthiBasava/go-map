@@ -7,20 +7,29 @@ import (
 	"go/token"
 	"io/ioutil"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v2"
 )
 
-type DomainField struct {
+type DomainFieldGetter struct {
+	Recv   string
 	Name   string
-	Type   string
-	Getter string
+	Result string
+}
+
+type DomainField struct {
+	Name          string
+	Type          string
+	IsTypePointer bool
+	IsSlice       bool
 }
 
 type DomainType struct {
-	Type   string
-	File   string
-	Fields []DomainField
+	Type    string
+	File    string
+	Fields  []*DomainField
+	Getters []DomainFieldGetter
 }
 
 type DTOInitFunc struct {
@@ -52,6 +61,18 @@ type DomainConfig struct {
 	MapToFunc   string
 }
 
+func IsPointer(field string) bool {
+	return strings.HasPrefix(field, "*")
+}
+
+func IsSlice(field string) bool {
+	return strings.HasPrefix(field, "[]")
+}
+
+func IsSliceOfPointers(field string) bool {
+	return strings.Contains(field, "[]*")
+}
+
 func UnmarshalDomainConfigYaml(filename string) error {
 
 	b, err := ioutil.ReadFile(filename)
@@ -70,7 +91,7 @@ func UnmarshalDomainConfigYaml(filename string) error {
 
 	// fmt.Printf("--- domain_types:\n%v\n\n", m["domain_types"])
 
-	var domainTypes []DomainType
+	dtypes := make(map[string][]string)
 
 	for k, v := range (m["domain_types"]).(map[interface{}]interface{}) {
 
@@ -79,34 +100,42 @@ func UnmarshalDomainConfigYaml(filename string) error {
 
 		// fmt.Println(mk, mv)
 
-		d := DomainType{
-			Type: mk,
-		}
-
 		for k1, v1 := range mv {
 
 			mk1 := k1.(string)
 			mv1 := v1.(string)
 
 			if mk1 == "file" {
-				d.File = mv1
+				dtypes[mv1] = append(dtypes[mv1], mk)
 			}
 
 		}
 
-		domainTypes = append(domainTypes, d)
 	}
 
-	// fmt.Println(domainTypes)
+	domainTypes := make(map[string]*DomainType)
 
-	for _, dtype := range domainTypes {
-		findDomainTypeFields(dtype.Type, dtype.File)
+	for file, types := range dtypes {
+		findDomainTypeFields(file, types, domainTypes)
+	}
+
+	for _, domainType := range domainTypes {
+		fmt.Println(domainType.Type, domainType.File)
+
+		for _, field := range domainType.Fields {
+			fmt.Println("\t", field)
+		}
+
+		for _, getter := range domainType.Getters {
+			fmt.Println("\t", getter)
+		}
+
 	}
 
 	return nil
 }
 
-func findDomainTypeFields(domainType string, file string) ([]DomainField, error) {
+func findDomainTypeFields(file string, domainTypes []string, dtypes map[string]*DomainType) ([]DomainType, error) {
 
 	src, err := ioutil.ReadFile(file)
 	if err != nil {
@@ -119,9 +148,16 @@ func findDomainTypeFields(domainType string, file string) ([]DomainField, error)
 		return nil, err
 	}
 
+	for _, dtype := range domainTypes {
+		dtypes[dtype] = &DomainType{
+			File: file,
+			Type: dtype,
+		}
+	}
+
 	ast.Inspect(f, func(n ast.Node) bool {
 
-		parseTree(n)
+		parseTree(n, dtypes)
 
 		return true
 	})
@@ -151,50 +187,85 @@ func fieldTypeParser(ftype ast.Expr) string {
 	return fieldType
 }
 
-func structTypeParser(strctype *ast.StructType) {
+func structTypeParser(strctype *ast.StructType) []*DomainField {
 
-	for _, field := range strctype.Fields.List {
+	fields := make([]*DomainField, strctype.Fields.NumFields())
+
+	for index, field := range strctype.Fields.List {
 
 		fieldType := fieldTypeParser(field.Type)
+		var fieldName string
 
-		for _, indent := range field.Names {
-			fmt.Println("\t", indent.Name, fieldType)
+		for _, ident := range field.Names {
+			if ident.Name != "" {
+				fieldName = ident.Name
+				break
+			}
+		}
+
+		isSlicePointers := IsSliceOfPointers(fieldType)
+
+		fields[index] = &DomainField{
+			Name:          fieldName,
+			Type:          fieldType,
+			IsTypePointer: isSlicePointers || IsPointer(fieldType),
+			IsSlice:       isSlicePointers || IsSlice(fieldType),
 		}
 
 	}
 
+	return fields
 }
 
-func parseTree(n ast.Node) {
+func parseTree(n ast.Node, dtypes map[string]*DomainType) {
 
 	switch x := n.(type) {
 	case *ast.TypeSpec:
 		switch types := x.Type.(type) {
 		case *ast.StructType:
-			fmt.Println(x.Name.Name)
-			structTypeParser(types)
+			if dtypes[x.Name.Name] == nil {
+				break
+			}
+			// fmt.Println(x.Name.Name)
+			dtypes[x.Name.Name].Fields = structTypeParser(types)
 		default:
 			fmt.Println(x.Name.Name)
 		}
 	case *ast.FuncDecl:
 
-		funcName := fieldTypeParser(x.Name)
-
-		if x.Type.Results != nil {
-			for _, res := range x.Type.Results.List {
-				resstr := fieldTypeParser(res.Type)
-				fmt.Println(resstr)
-			}
-		}
-
 		if x.Recv != nil {
+
+			var recv string
+
 			for _, field := range x.Recv.List {
 				if field == nil {
 					continue
 				}
-				fieldType := fieldTypeParser(field.Type)
-				fmt.Printf("(%s) %s\n", fieldType, funcName)
+				recv = fieldTypeParser(field.Type)
+				break
 			}
+
+			dtype := dtypes[recv]
+			if dtype == nil {
+				break
+			}
+
+			funcName := fieldTypeParser(x.Name)
+			var resstr string
+
+			if x.Type.Results != nil {
+				for _, res := range x.Type.Results.List {
+					resstr = fieldTypeParser(res.Type)
+				}
+			}
+
+			getter := DomainFieldGetter{
+				Recv:   recv,
+				Name:   funcName,
+				Result: resstr,
+			}
+
+			dtypes[recv].Getters = append(dtypes[recv].Getters, getter)
 		}
 
 	}
