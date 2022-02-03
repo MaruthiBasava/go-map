@@ -8,28 +8,41 @@ import (
 	"io/ioutil"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"gopkg.in/yaml.v2"
 )
 
 type DomainFieldGetter struct {
-	Recv   string
-	Name   string
-	Result string
+	Recv       string
+	Name       string
+	ResultType FieldType
 }
 
-type DomainField struct {
-	Name          string
+type DomainFunc struct {
+	Recv       string
+	Name       string
+	ResultType FieldType
+}
+
+type FieldType struct {
+	Package       string
 	Type          string
 	IsTypePointer bool
 	IsSlice       bool
 }
 
+type DomainField struct {
+	Name   string
+	Type   FieldType
+	Getter DomainFieldGetter
+}
+
 type DomainType struct {
-	Type    string
-	File    string
-	Fields  []*DomainField
-	Getters []DomainFieldGetter
+	Type   string
+	File   string
+	Fields map[string]*DomainField
+	Funcs  []DomainFunc
 }
 
 type DTOInitFunc struct {
@@ -71,6 +84,14 @@ func IsSlice(field string) bool {
 
 func IsSliceOfPointers(field string) bool {
 	return strings.Contains(field, "[]*")
+}
+
+func RemovePointer(field string) string {
+	return strings.Replace(field, "*", "", 1)
+}
+
+func RemoveArray(field string) string {
+	return strings.Replace(field, "[]", "", 1)
 }
 
 func UnmarshalDomainConfigYaml(filename string) error {
@@ -119,20 +140,51 @@ func UnmarshalDomainConfigYaml(filename string) error {
 		findDomainTypeFields(file, types, domainTypes)
 	}
 
-	for _, domainType := range domainTypes {
-		fmt.Println(domainType.Type, domainType.File)
+	clean(domainTypes)
 
-		for _, field := range domainType.Fields {
-			fmt.Println("\t", field)
-		}
+	// for _, domainType := range domainTypes {
+	// 	fmt.Println(domainType.Type, domainType.File)
 
-		for _, getter := range domainType.Getters {
-			fmt.Println("\t", getter)
-		}
+	// 	for _, field := range domainType.Fields {
+	// 		fmt.Println("\t", field.Name, field.Type, field.Type.IsSlice, field.Type.IsTypePointer)
+	// 		fmt.Println("\t\t", field.Getter)
 
-	}
+	// 	}
+
+	// }
+
+	GenerateDomainMappers(domainTypes)
 
 	return nil
+}
+
+func LowercaseFirstLetter(str string) string {
+	r := []rune(str)
+	r[0] = unicode.ToLower(r[0])
+	return string(r)
+}
+
+func clean(dtypes map[string]*DomainType) {
+
+	// 1. check for getters
+
+	for _, dtype := range dtypes {
+		for _, dfunc := range dtype.Funcs {
+			unexFunc := LowercaseFirstLetter(dfunc.Name)
+			if dtype.Fields[unexFunc] == nil {
+				continue
+			}
+
+			if dtype.Fields[unexFunc].Type != dfunc.ResultType {
+				continue
+			}
+
+			dtype.Fields[unexFunc].Getter = DomainFieldGetter(dfunc)
+		}
+
+		dtype.Funcs = nil
+	}
+
 }
 
 func findDomainTypeFields(file string, domainTypes []string, dtypes map[string]*DomainType) ([]DomainType, error) {
@@ -150,8 +202,9 @@ func findDomainTypeFields(file string, domainTypes []string, dtypes map[string]*
 
 	for _, dtype := range domainTypes {
 		dtypes[dtype] = &DomainType{
-			File: file,
-			Type: dtype,
+			File:   file,
+			Type:   dtype,
+			Fields: make(map[string]*DomainField),
 		}
 	}
 
@@ -173,7 +226,12 @@ func fieldTypeParser(ftype ast.Expr) string {
 	case *ast.Ident:
 		fieldType = fi.Name
 	case *ast.SelectorExpr:
-		fieldType = fi.Sel.Name
+		fldtype := fi.Sel.Name
+		pkg := fieldTypeParser(fi.X)
+		if pkg != "" {
+			fldtype = fmt.Sprintf("%s.%s", pkg, fi.Sel.Name)
+		}
+		fieldType = fldtype
 	case *ast.StarExpr:
 		fieldType = fmt.Sprintf("*%s", fi.X.(*ast.Ident).Name)
 	case *ast.ArrayType:
@@ -187,11 +245,11 @@ func fieldTypeParser(ftype ast.Expr) string {
 	return fieldType
 }
 
-func structTypeParser(strctype *ast.StructType) []*DomainField {
+func structTypeParser(strctype *ast.StructType) map[string]*DomainField {
 
-	fields := make([]*DomainField, strctype.Fields.NumFields())
+	fields := make(map[string]*DomainField, strctype.Fields.NumFields())
 
-	for index, field := range strctype.Fields.List {
+	for _, field := range strctype.Fields.List {
 
 		fieldType := fieldTypeParser(field.Type)
 		var fieldName string
@@ -203,13 +261,26 @@ func structTypeParser(strctype *ast.StructType) []*DomainField {
 			}
 		}
 
+		// fmt.Println()
+
 		isSlicePointers := IsSliceOfPointers(fieldType)
 
-		fields[index] = &DomainField{
-			Name:          fieldName,
-			Type:          fieldType,
-			IsTypePointer: isSlicePointers || IsPointer(fieldType),
-			IsSlice:       isSlicePointers || IsSlice(fieldType),
+		split := strings.Split(RemoveArray(RemovePointer(fieldType)), ".")
+		pkg := ""
+		ftype := split[0]
+		if len(split) == 2 {
+			pkg = split[0]
+			ftype = split[1]
+		}
+
+		fields[fieldName] = &DomainField{
+			Name: fieldName,
+			Type: FieldType{
+				Package:       pkg,
+				Type:          ftype,
+				IsTypePointer: isSlicePointers || IsPointer(fieldType),
+				IsSlice:       isSlicePointers || IsSlice(fieldType),
+			},
 		}
 
 	}
@@ -226,7 +297,6 @@ func parseTree(n ast.Node, dtypes map[string]*DomainType) {
 			if dtypes[x.Name.Name] == nil {
 				break
 			}
-			// fmt.Println(x.Name.Name)
 			dtypes[x.Name.Name].Fields = structTypeParser(types)
 		default:
 			fmt.Println(x.Name.Name)
@@ -245,7 +315,8 @@ func parseTree(n ast.Node, dtypes map[string]*DomainType) {
 				break
 			}
 
-			dtype := dtypes[recv]
+			k := RemovePointer(recv)
+			dtype := dtypes[k]
 			if dtype == nil {
 				break
 			}
@@ -259,15 +330,34 @@ func parseTree(n ast.Node, dtypes map[string]*DomainType) {
 				}
 			}
 
-			getter := DomainFieldGetter{
-				Recv:   recv,
-				Name:   funcName,
-				Result: resstr,
+			isSlicePointers := IsSliceOfPointers(resstr)
+
+			split := strings.Split(RemoveArray(RemovePointer(resstr)), ".")
+			pkg := ""
+			ftype := split[0]
+			if len(split) == 2 {
+				pkg = split[0]
+				ftype = split[1]
 			}
 
-			dtypes[recv].Getters = append(dtypes[recv].Getters, getter)
-		}
+			getter := DomainFunc{
+				Recv: recv,
+				Name: funcName,
+				ResultType: FieldType{
+					Package:       pkg,
+					Type:          ftype,
+					IsTypePointer: isSlicePointers || IsPointer(resstr),
+					IsSlice:       isSlicePointers || IsSlice(resstr),
+				},
+			}
 
+			dtypes[k].Funcs = append(dtypes[k].Funcs, getter)
+		}
+	default:
+		if x == nil {
+			break
+		}
+		// fmt.Printf("%T\n", x)
 	}
 
 }

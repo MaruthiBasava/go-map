@@ -4,21 +4,21 @@ package: menu
 filename: mapping_gen.go
 domain_types:
     RestaurantThumbnail:
-        file: "restaurant.go"
+        file: "domain/restaurant.go"
     Restaurant: 
-        file: "restaurant.go"
+        file: "domain/restaurant.go"
     MenuCategory: 
-        file: "category.go"
+        file: "domain/category.go"
     DishThumbnail:
-        file: "restaurant.go"
+        file: "domain/restaurant.go"
     Dish: 
-        file: "dish.go"
+        file: "domain/dish.go"
     MenuCategoryPosition:
-        file: "layout.go"
+        file: "domain/layout.go"
     DishPosition:
-        file: "layout.go"
+        file: "domain/layout.go"
     MenuLayout:
-        file: "layout.go"
+        file: "domain/layout.go"
 
 dto_suffix: "Output"
 map_from_func: "{Map{domain_type}From}"
