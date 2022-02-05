@@ -39,6 +39,9 @@ func (a NonAggregateDTO) MapToDict(receiver *Statement) Dict {
 
 func GenerateDomainMappers(dc *DomainConfig) {
 
+	// fp := path.Join(dc.Dir, dc.Filename)
+	f := NewFile(dc.Package)
+
 	nonaggres := make(map[string]NonAggregateDTO)
 
 	for name, dtoType := range dc.DTOTypes {
@@ -112,6 +115,7 @@ func GenerateDomainMappers(dc *DomainConfig) {
 				getters = append(getters, get)
 			}
 		}
+
 		for _, field := range dtoType.Fields {
 
 			if field.Name == "" {
@@ -120,8 +124,16 @@ func GenerateDomainMappers(dc *DomainConfig) {
 
 			a := Id(field.Name)
 
-			mapFromVal := Qual("o", field.Name)
-			mapToVal := Qual(firstLetter, field.MappingTo)
+			fieldPkg := field.Type.Package
+
+			if fieldPkg == pkg {
+				fieldPkg = ""
+			}
+
+			outputId := "o"
+
+			mapFromVal := Id(outputId).Dot(field.Name)
+			mapToVal := Id(firstLetter).Dot(field.MappingTo)
 			name := LowercaseFirstLetter(field.Name)
 
 			if field.IsMap {
@@ -139,9 +151,9 @@ func GenerateDomainMappers(dc *DomainConfig) {
 
 				mapType := Map(Qual(field.MapKey.Package, field.MapKey.Type))
 				if dtoType.Func == "" {
-					mapType.Qual(field.Type.Package, field.Type.Type+dc.DTOSuffix)
+					mapType.Qual(fieldPkg, field.Type.Type+dc.DTOSuffix)
 				} else {
-					mapType.Qual(field.Type.Package, field.Type.Type)
+					mapType.Qual(fieldPkg, field.Type.Type)
 				}
 
 				// mFrom := Id(name).Op(":=").Make(mapType)
@@ -159,20 +171,20 @@ func GenerateDomainMappers(dc *DomainConfig) {
 				mapToVal = Qual("", name)
 				// shortName := name[0:3]
 				mFrom := Id(name).Op(":=").Make(
-					Index().Op("*").Qual(pkg, field.Type.Type).Op(",").Len(
-						Qual("o", field.Name),
+					Index().Op("*").Id(field.Type.Type).Op(",").Len(
+						Id(outputId).Dot(field.Name),
 					),
 				)
 
 				mMapping := For(
 					Id("i").Op(":=").Lit(0),
-					Id("i").Op("<").Len(Qual("o", field.Name)),
+					Id("i").Op("<").Len(Id(outputId).Dot(field.Name)),
 					Id("i").Op("++"),
 					// Id("index").Op(",").Id(shortName).Op(":=").Range().Qual("o", field.Name),
 				).Block(
-					Id(name).Index(Id("i")).Op("=").Op("&").Qual(pkg, field.Type.Type).Values(
+					Id(name).Index(Id("i")).Op("=").Op("&").Id(field.Type.Type).Values(
 						nonagg.MapFromToDict(
-							Qual("o", field.Name).Index(Id("i")),
+							Id(outputId).Dot(field.Name).Index(Id("i")),
 						),
 					),
 					// Id(name).Index(Id("index")).Op("=").Id(shortName[0:1]),
@@ -182,19 +194,19 @@ func GenerateDomainMappers(dc *DomainConfig) {
 				mapFromInnerMapping = append(mapFromInnerMapping, mMapping)
 
 				mTo := Id(name).Op(":=").Make(
-					Index().Qual(pkg, field.Type.Type+dc.DTOSuffix).Op(",").Len(
-						Qual(firstLetter, field.MappingTo),
+					Index().Id(field.Type.Type + dc.DTOSuffix).Op(",").Len(
+						Id(firstLetter).Dot(field.MappingTo),
 					),
 				)
 
 				mToMapping := For(
 					Id("i").Op(":=").Lit(0),
-					Id("i").Op("<").Len(Qual(firstLetter, field.Name)),
+					Id("i").Op("<").Len(Id(firstLetter).Dot(field.Name)),
 					Id("i").Op("++"),
 				).Block(
-					Id(name).Index(Id("i")).Op("=").Qual(pkg, field.Type.Type+dc.DTOSuffix).Values(
+					Id(name).Index(Id("i")).Op("=").Id(field.Type.Type + dc.DTOSuffix).Values(
 						nonagg.MapToDict(
-							Qual(firstLetter, field.MappingTo).Index(Id("i")),
+							Id(firstLetter).Dot(field.MappingTo).Index(Id("i")),
 						),
 					),
 				)
@@ -204,15 +216,11 @@ func GenerateDomainMappers(dc *DomainConfig) {
 
 			}
 
-			// if field.Type.IsTypePointer {
-			// 	a = a.Op("*")
-			// }
-
 			if dt := dc.DTOTypes[field.Type.Type]; dt != nil && dt.Func == "" {
-				fields[i] = a.Qual(field.Type.Package, dt.Type+dc.DTOSuffix)
+				fields[i] = a.Qual(fieldPkg, dt.Type+dc.DTOSuffix)
 			} else {
-				// fmt.Println(field.Type.Package)
-				fields[i] = a.Qual(field.Type.Package, field.Type.Type)
+				// fmt.Println(fieldPkg)
+				fields[i] = a.Qual(fieldPkg, field.Type.Type)
 			}
 
 			mapFromDict[Id(field.MappingTo)] = mapFromVal
@@ -226,44 +234,40 @@ func GenerateDomainMappers(dc *DomainConfig) {
 		mapToOutput := strings.Replace(dc.MapToFunc, "{suffix}", dc.DTOSuffix, 1)
 
 		if dtoType.Func == "" {
-			strct := Type().Id(dtoName).Struct(fields...)
-			fmt.Printf("%#v\n", strct)
-
-			for _, g := range getters {
-				fmt.Printf("%#v\n", g)
-			}
-
+			f.Type().Id(dtoName).Struct(fields...)
 		}
 
 		if !dtoType.IsAggregateRoot {
 			continue
 		}
 
-		structMappingFrom := Id("d").Op(":=").Op("&").Qual(pkg, dtoType.Type).Values(mapFromDict)
+		structMappingFrom := Id("d").Op(":=").Op("&").Id(dtoType.Type).Values(mapFromDict)
 		mapFromInnerMapping = append(mapFromInnerMapping, structMappingFrom)
 
 		returnCode := Return(Id("d"))
 		mapFromInnerMapping = append(mapFromInnerMapping, returnCode)
 
-		structMappingTo := Id("d").Op(":=").Op("&").Qual(pkg, dtoName).Values(mapToDict)
+		structMappingTo := Id("d").Op(":=").Op("&").Id(dtoName).Values(mapToDict)
 		mapToInnerMapping = append(mapToInnerMapping, structMappingTo)
 		mapToInnerMapping = append(mapToInnerMapping, returnCode)
 
-		mapFrom := Func().Id(mapDomainFrom).Params(
-			Id("output").Qual(pkg, dtoName),
-		).Op("*").Qual(pkg, dtoType.Type).Block(
+		f.Func().Id(mapDomainFrom).Params(
+			Id("output").Id(dtoName),
+		).Op("*").Id(dtoType.Type).Block(
 			mapFromInnerMapping...,
 		)
 
-		mapTo := Func().Params(
+		f.Func().Params(
 			Id(firstLetter).Op("*").Id(dtoType.Type),
-		).Id(mapToOutput).Params().Qual(pkg, dtoName).Block(
+		).Id(mapToOutput).Params().Id(dtoName).Block(
 			mapToInnerMapping...,
 		)
 
-		fmt.Printf("%#v\n", mapFrom)
-		fmt.Printf("%#v\n", mapTo)
+		for _, g := range getters {
+			f.Add(g)
+		}
 
 	}
 
+	fmt.Printf("%#v\n", f)
 }

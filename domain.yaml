@@ -1,7 +1,7 @@
 
 dir: .
 package: menu 
-filename: mapping_gen.go
+filename: mapping_gen
 domain_types:
     RestaurantThumbnail:
         file: "domain/restaurant.go"
