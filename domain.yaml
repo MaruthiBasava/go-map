@@ -21,27 +21,24 @@ domain_types:
         file: "domain/layout.go"
 
 dto_suffix: "Output"
-map_from_func: "{Map{domain_type}From}"
+map_from_func: "Map{domain_type}From"
 map_to_func: "MapTo{suffix}"
 domain_dto_types:
     RestaurantThumbnail:
         is_aggregate_root: false
     Restaurant:
         is_aggregate_root: true 
-        map_to_domain_from_dto: true
-        map_to_dto_from_domain: true
+        domain_mapping_enabled: true
         ignore_domain_fields:
             - removedThumbnailIDs
     MenuCategory:
         is_aggregate_root: true 
-        map_to_domain_from_dto: true
-        map_to_dto_from_domain: true
+        domain_mapping_enabled: true
     DishThumbnail:
         is_aggregate_root: false
     Dish:
         is_aggregate_root: true 
-        map_to_domain_from_dto: true
-        map_to_dto_from_domain: true
+        domain_mapping_enabled: true
         ignore_domain_fields:
             - removedThumbnailIDs
     MenuCategoryPosition:
@@ -62,8 +59,15 @@ domain_dto_types:
                 - position
     MenuLayout:
         is_aggregate_root: true 
-        map_to_domain_from_dto: true
-        map_to_dto_from_domain: true
+        domain_mapping_enabled: true
+        map_bindings:
+             CategoryOrder:
+                key: MenuCategoryPosition.menuCategoryID
+             DishOrder:
+                key: DishPosition.dishID
+        ignore_domain_fields:
+            - removedMenuCategories
+            - removedDishes
 
 
 

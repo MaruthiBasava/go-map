@@ -8,7 +8,6 @@ import (
 	"io/ioutil"
 	"path/filepath"
 	"strings"
-	"unicode"
 
 	"gopkg.in/yaml.v2"
 )
@@ -34,6 +33,8 @@ type FieldType struct {
 
 type DomainField struct {
 	Name   string
+	IsMap  bool
+	MapKey FieldType
 	Type   FieldType
 	Getter DomainFieldGetter
 }
@@ -45,53 +46,42 @@ type DomainType struct {
 	Funcs  []DomainFunc
 }
 
-type DTOInitFunc struct {
-	Func   string
-	Params []string
+type DTOField struct {
+	Name      string
+	MappingTo string
+	IsMap     bool
+	MapKey    FieldType
+	Type      FieldType
 }
 
-type DTOField struct {
-	Name string
-	Type string
+type DTOMapBinding struct {
+	Name  string
+	Type  string
+	Field string
 }
 
 type DTOType struct {
-	Type               string
-	IsAggregateRoot    bool
-	MapToDomain        bool
-	MapFromDomain      bool
+	Type            string
+	IsAggregateRoot bool
+	IsDomainMapping bool
+
 	IgnoreDomainFields []string
-	Fields             []DTOField
+	Fields             map[string]*DTOField
+
+	MapBindings map[string]DTOMapBinding
+	Func        string
+	Params      []string
 }
 
 type DomainConfig struct {
 	Dir         string
 	Package     string
 	Filename    string
-	DomainTypes []DomainType
+	DomainTypes map[string]*DomainType
+	DTOTypes    map[string]*DTOType
 	DTOSuffix   string
 	MapFromFunc string
 	MapToFunc   string
-}
-
-func IsPointer(field string) bool {
-	return strings.HasPrefix(field, "*")
-}
-
-func IsSlice(field string) bool {
-	return strings.HasPrefix(field, "[]")
-}
-
-func IsSliceOfPointers(field string) bool {
-	return strings.Contains(field, "[]*")
-}
-
-func RemovePointer(field string) string {
-	return strings.Replace(field, "*", "", 1)
-}
-
-func RemoveArray(field string) string {
-	return strings.Replace(field, "[]", "", 1)
 }
 
 func UnmarshalDomainConfigYaml(filename string) error {
@@ -109,12 +99,123 @@ func UnmarshalDomainConfigYaml(filename string) error {
 	}
 
 	// fmt.Printf("--- m:\n%v\n\n", m)
+	// fmt.Printf("--- domain_dto_types:\n%v\n\n", m["domain_dto_types"])
 
-	// fmt.Printf("--- domain_types:\n%v\n\n", m["domain_types"])
+	dc := &DomainConfig{}
+
+	dc.Dir = m["dir"].(string)
+	dc.Package = m["package"].(string)
+	dc.Filename = m["filename"].(string)
+
+	dc.DomainTypes = make(map[string]*DomainType)
+	dtypes := parseDomainTypes(m["domain_types"].(map[interface{}]interface{}))
+	for file, types := range dtypes {
+		findDomainTypeFields(file, types, dc.DomainTypes)
+	}
+
+	dc.DTOSuffix = m["dto_suffix"].(string)
+	dc.MapFromFunc = m["map_from_func"].(string)
+	dc.MapToFunc = m["map_to_func"].(string)
+	dc.DTOTypes = parseDTOTypes(m["domain_dto_types"].(map[interface{}]interface{}))
+
+	clean(dc)
+
+	// for _, domainType := range domainTypes {
+	// 	fmt.Println(domainType.Type, domainType.File)
+
+	// 	for _, field := range domainType.Fields {
+	// 		fmt.Println("\t", field.Name, field.Type, field.Type.IsSlice, field.Type.IsTypePointer)
+	// 		fmt.Println("\t\t", field.Getter)
+
+	// 	}
+
+	// }
+
+	GenerateDomainMappers(dc)
+
+	return nil
+}
+
+func parseDTOTypes(m map[interface{}]interface{}) map[string]*DTOType {
+
+	dtotypes := make(map[string]*DTOType)
+
+	for k, v := range m {
+
+		mk := k.(string)
+		mv := v.(map[interface{}]interface{})
+
+		dto := &DTOType{}
+		dto.Fields = make(map[string]*DTOField)
+		dto.MapBindings = make(map[string]DTOMapBinding)
+		dto.Type = mk
+		dto.IsAggregateRoot = mv["is_aggregate_root"].(bool)
+		if dto.IsAggregateRoot {
+			dto.IsDomainMapping = mv["domain_mapping_enabled"].(bool)
+		}
+
+		if mv["ignore_domain_fields"] != nil {
+			ignoreFields := mv["ignore_domain_fields"].([]interface{})
+			dto.IgnoreDomainFields = make([]string, len(ignoreFields))
+			for index, fi := range ignoreFields {
+				dto.IgnoreDomainFields[index] = fi.(string)
+			}
+		}
+
+		if mv["map_bindings"] != nil {
+			mapBindings := mv["map_bindings"].(map[interface{}]interface{})
+
+			for mKey, mVal := range mapBindings {
+				for _, m2Val := range mVal.(map[interface{}]interface{}) {
+
+					expStr := strings.Split(m2Val.(string), ".")
+
+					m1Key := mKey.(string)
+
+					dto.MapBindings[m1Key] = DTOMapBinding{
+						Name:  m1Key,
+						Type:  expStr[0],
+						Field: expStr[1],
+					}
+
+					// fmt.Println(dto.MapBindings[m1Key])
+				}
+			}
+		}
+
+		for k2, v2 := range mv {
+
+			switch mv2 := v2.(type) {
+			case map[interface{}]interface{}:
+
+				if k2.(string) == "map_bindings" {
+					continue
+				}
+
+				if mv2["is_init_func"].(bool) {
+					dto.Func = k2.(string)
+
+					params := mv2["param_mapping"].([]interface{})
+					dto.Params = make([]string, len(params))
+					for i, param := range params {
+						dto.Params[i] = param.(string)
+					}
+				}
+
+			}
+		}
+
+		dtotypes[mk] = dto
+	}
+
+	return dtotypes
+}
+
+func parseDomainTypes(m map[interface{}]interface{}) map[string][]string {
 
 	dtypes := make(map[string][]string)
 
-	for k, v := range (m["domain_types"]).(map[interface{}]interface{}) {
+	for k, v := range m {
 
 		mk := k.(string)
 		mv := v.(map[interface{}]interface{})
@@ -134,52 +235,59 @@ func UnmarshalDomainConfigYaml(filename string) error {
 
 	}
 
-	domainTypes := make(map[string]*DomainType)
+	return dtypes
+}
 
-	for file, types := range dtypes {
-		findDomainTypeFields(file, types, domainTypes)
+func findIgnoredKeyboard(unexFunc string, dto *DTOType) bool {
+	for _, ignored := range dto.IgnoreDomainFields {
+		if ignored == unexFunc {
+			return true
+		}
 	}
 
-	clean(domainTypes)
-
-	// for _, domainType := range domainTypes {
-	// 	fmt.Println(domainType.Type, domainType.File)
-
-	// 	for _, field := range domainType.Fields {
-	// 		fmt.Println("\t", field.Name, field.Type, field.Type.IsSlice, field.Type.IsTypePointer)
-	// 		fmt.Println("\t\t", field.Getter)
-
-	// 	}
-
-	// }
-
-	GenerateDomainMappers(domainTypes)
-
-	return nil
+	return false
 }
 
-func LowercaseFirstLetter(str string) string {
-	r := []rune(str)
-	r[0] = unicode.ToLower(r[0])
-	return string(r)
-}
-
-func clean(dtypes map[string]*DomainType) {
+func clean(dc *DomainConfig) {
 
 	// 1. check for getters
 
-	for _, dtype := range dtypes {
-		for _, dfunc := range dtype.Funcs {
-			unexFunc := LowercaseFirstLetter(dfunc.Name)
-			if dtype.Fields[unexFunc] == nil {
+	for dtypestr, dtype := range dc.DomainTypes {
+		dto := dc.DTOTypes[dtypestr]
+
+		for dname, dfield := range dtype.Fields {
+
+			// unexFunc := LowercaseFirstLetter(dfunc.Name)
+
+			if findIgnoredKeyboard(dname, dto) {
 				continue
 			}
 
-			if dtype.Fields[unexFunc].Type != dfunc.ResultType {
-				continue
+			// if dtype.Fields[unexFunc] == nil {
+			// 	continue
+			// }
+
+			// if dtype.Fields[unexFunc].Type != dfunc.ResultType {
+			// 	continue
+			// }
+
+			dfield.Getter = DomainFieldGetter{
+				Recv: dtypestr,
+				Name: dfield.Name,
 			}
 
-			dtype.Fields[unexFunc].Getter = DomainFieldGetter(dfunc)
+			name := strings.Title(dfield.Name)
+
+			if dfield.IsMap {
+				fmt.Println(dfield.Name, dfield.IsMap, dfield.MapKey, dfield.Type)
+			}
+			dto.Fields[name] = &DTOField{
+				Name:      name,
+				MappingTo: dfield.Name,
+				IsMap:     dfield.IsMap,
+				MapKey:    dfield.MapKey,
+				Type:      dfield.Type,
+			}
 		}
 
 		dtype.Funcs = nil
@@ -216,148 +324,4 @@ func findDomainTypeFields(file string, domainTypes []string, dtypes map[string]*
 	})
 
 	return nil, nil
-}
-
-func fieldTypeParser(ftype ast.Expr) string {
-
-	var fieldType string
-
-	switch fi := ftype.(type) {
-	case *ast.Ident:
-		fieldType = fi.Name
-	case *ast.SelectorExpr:
-		fldtype := fi.Sel.Name
-		pkg := fieldTypeParser(fi.X)
-		if pkg != "" {
-			fldtype = fmt.Sprintf("%s.%s", pkg, fi.Sel.Name)
-		}
-		fieldType = fldtype
-	case *ast.StarExpr:
-		fieldType = fmt.Sprintf("*%s", fi.X.(*ast.Ident).Name)
-	case *ast.ArrayType:
-		fieldType = fmt.Sprintf("[]%s", fieldTypeParser(fi.Elt))
-	case *ast.MapType:
-		break
-	default:
-		fmt.Printf("Handle this type: %T\n", fi)
-	}
-
-	return fieldType
-}
-
-func structTypeParser(strctype *ast.StructType) map[string]*DomainField {
-
-	fields := make(map[string]*DomainField, strctype.Fields.NumFields())
-
-	for _, field := range strctype.Fields.List {
-
-		fieldType := fieldTypeParser(field.Type)
-		var fieldName string
-
-		for _, ident := range field.Names {
-			if ident.Name != "" {
-				fieldName = ident.Name
-				break
-			}
-		}
-
-		// fmt.Println()
-
-		isSlicePointers := IsSliceOfPointers(fieldType)
-
-		split := strings.Split(RemoveArray(RemovePointer(fieldType)), ".")
-		pkg := ""
-		ftype := split[0]
-		if len(split) == 2 {
-			pkg = split[0]
-			ftype = split[1]
-		}
-
-		fields[fieldName] = &DomainField{
-			Name: fieldName,
-			Type: FieldType{
-				Package:       pkg,
-				Type:          ftype,
-				IsTypePointer: isSlicePointers || IsPointer(fieldType),
-				IsSlice:       isSlicePointers || IsSlice(fieldType),
-			},
-		}
-
-	}
-
-	return fields
-}
-
-func parseTree(n ast.Node, dtypes map[string]*DomainType) {
-
-	switch x := n.(type) {
-	case *ast.TypeSpec:
-		switch types := x.Type.(type) {
-		case *ast.StructType:
-			if dtypes[x.Name.Name] == nil {
-				break
-			}
-			dtypes[x.Name.Name].Fields = structTypeParser(types)
-		default:
-			fmt.Println(x.Name.Name)
-		}
-	case *ast.FuncDecl:
-
-		if x.Recv != nil {
-
-			var recv string
-
-			for _, field := range x.Recv.List {
-				if field == nil {
-					continue
-				}
-				recv = fieldTypeParser(field.Type)
-				break
-			}
-
-			k := RemovePointer(recv)
-			dtype := dtypes[k]
-			if dtype == nil {
-				break
-			}
-
-			funcName := fieldTypeParser(x.Name)
-			var resstr string
-
-			if x.Type.Results != nil {
-				for _, res := range x.Type.Results.List {
-					resstr = fieldTypeParser(res.Type)
-				}
-			}
-
-			isSlicePointers := IsSliceOfPointers(resstr)
-
-			split := strings.Split(RemoveArray(RemovePointer(resstr)), ".")
-			pkg := ""
-			ftype := split[0]
-			if len(split) == 2 {
-				pkg = split[0]
-				ftype = split[1]
-			}
-
-			getter := DomainFunc{
-				Recv: recv,
-				Name: funcName,
-				ResultType: FieldType{
-					Package:       pkg,
-					Type:          ftype,
-					IsTypePointer: isSlicePointers || IsPointer(resstr),
-					IsSlice:       isSlicePointers || IsSlice(resstr),
-				},
-			}
-
-			dtypes[k].Funcs = append(dtypes[k].Funcs, getter)
-		}
-	default:
-		if x == nil {
-			break
-		}
-		// fmt.Printf("%T\n", x)
-	}
-
 }
