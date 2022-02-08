@@ -82,6 +82,7 @@ type DomainConfig struct {
 	DTOSuffix   string
 	MapFromFunc string
 	MapToFunc   string
+	Imports     map[string]string
 }
 
 func UnmarshalDomainConfigYaml(filename string) error {
@@ -106,6 +107,14 @@ func UnmarshalDomainConfigYaml(filename string) error {
 	dc.Dir = m["dir"].(string)
 	dc.Package = m["package"].(string)
 	dc.Filename = m["filename"].(string)
+
+	dc.Imports = make(map[string]string)
+
+	for k, v := range m["imports"].(map[interface{}]interface{}) {
+		imppkg := k.(string)
+		url := v.(string)
+		dc.Imports[imppkg] = url
+	}
 
 	dc.DomainTypes = make(map[string]*DomainType)
 	dtypes := parseDomainTypes(m["domain_types"].(map[interface{}]interface{}))
@@ -257,19 +266,26 @@ func clean(dc *DomainConfig) {
 
 		for dname, dfield := range dtype.Fields {
 
-			// unexFunc := LowercaseFirstLetter(dfunc.Name)
-
-			if findIgnoredKeyboard(dname, dto) {
-				continue
+			if url, ok := dc.Imports[dfield.MapKey.Package]; ok {
+				dfield.MapKey.Package = url
 			}
 
-			// if dtype.Fields[unexFunc] == nil {
-			// 	continue
-			// }
+			if url, ok := dc.Imports[dfield.Type.Package]; ok {
+				dfield.Type.Package = url
+			}
 
-			// if dtype.Fields[unexFunc].Type != dfunc.ResultType {
-			// 	continue
-			// }
+			if findIgnoredKeyboard(dname, dto) {
+
+				dc.DomainTypes[dtypestr].Fields[dname] = &DomainField{
+					Name:   dfield.Name,
+					IsMap:  dfield.IsMap,
+					MapKey: dfield.MapKey,
+					Type:   dfield.Type,
+					Getter: dfield.Getter,
+				}
+
+				continue
+			}
 
 			dfield.Getter = DomainFieldGetter{
 				Recv: dtypestr,
@@ -281,6 +297,7 @@ func clean(dc *DomainConfig) {
 			if dfield.IsMap {
 				fmt.Println(dfield.Name, dfield.IsMap, dfield.MapKey, dfield.Type)
 			}
+
 			dto.Fields[name] = &DTOField{
 				Name:      name,
 				MappingTo: dfield.Name,
@@ -288,6 +305,7 @@ func clean(dc *DomainConfig) {
 				MapKey:    dfield.MapKey,
 				Type:      dfield.Type,
 			}
+
 		}
 
 		dtype.Funcs = nil

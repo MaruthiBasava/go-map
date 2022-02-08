@@ -162,37 +162,37 @@ func parseTree(n ast.Node, dtypes map[string]*DomainType) {
 				break
 			}
 
-			funcName := fieldTypeParser(x.Name)
-			var resstr string
+			// funcName := fieldTypeParser(x.Name)
+			// var resstr string
 
-			if x.Type.Results != nil {
-				for _, res := range x.Type.Results.List {
-					resstr = fieldTypeParser(res.Type)
-				}
-			}
+			// if x.Type.Results != nil {
+			// 	for _, res := range x.Type.Results.List {
+			// 		resstr = fieldTypeParser(res.Type)
+			// 	}
+			// }
 
-			isSlicePointers := IsSliceOfPointers(resstr)
+			// isSlicePointers := IsSliceOfPointers(resstr)
 
-			split := strings.Split(RemoveArray(RemovePointer(resstr)), ".")
-			pkg := ""
-			ftype := split[0]
-			if len(split) == 2 {
-				pkg = split[0]
-				ftype = split[1]
-			}
+			// split := strings.Split(RemoveArray(RemovePointer(resstr)), ".")
+			// pkg := ""
+			// ftype := split[0]
+			// if len(split) == 2 {
+			// 	pkg = split[0]
+			// 	ftype = split[1]
+			// }
 
-			getter := DomainFunc{
-				Recv: recv,
-				Name: funcName,
-				ResultType: FieldType{
-					Package:       pkg,
-					Type:          ftype,
-					IsTypePointer: isSlicePointers || IsPointer(resstr),
-					IsSlice:       isSlicePointers || IsSlice(resstr),
-				},
-			}
+			// getter := DomainFunc{
+			// 	Recv: recv,
+			// 	Name: funcName,
+			// 	ResultType: FieldType{
+			// 		Package:       pkg,
+			// 		Type:          ftype,
+			// 		IsTypePointer: isSlicePointers || IsPointer(resstr),
+			// 		IsSlice:       isSlicePointers || IsSlice(resstr),
+			// 	},
+			// }
 
-			dtypes[k].Funcs = append(dtypes[k].Funcs, getter)
+			// dtypes[k].Funcs = append(dtypes[k].Funcs, getter)
 		}
 	default:
 		if x == nil {

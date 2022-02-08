@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
+	"path"
 	"strings"
 
 	. "github.com/dave/jennifer/jen"
@@ -18,8 +20,7 @@ func (a NonAggregateDTO) MapFromToDict(receiver *Statement) Dict {
 	dict := Dict{}
 
 	for k, v := range a.mapFrom {
-		r := *receiver
-		dict[Id(k)] = (&r).Dot(v)
+		dict[Id(k)] = receiver.Clone().Dot(v)
 	}
 
 	return dict
@@ -30,8 +31,7 @@ func (a NonAggregateDTO) MapToDict(receiver *Statement) Dict {
 	dict := Dict{}
 
 	for k, v := range a.mapTo {
-		r := *receiver
-		dict[Id(k)] = (&r).Dot(v)
+		dict[Id(k)] = receiver.Clone().Dot(v)
 	}
 
 	return dict
@@ -39,8 +39,14 @@ func (a NonAggregateDTO) MapToDict(receiver *Statement) Dict {
 
 func GenerateDomainMappers(dc *DomainConfig) {
 
-	// fp := path.Join(dc.Dir, dc.Filename)
+	fp := path.Join(dc.Dir, dc.Filename)
 	f := NewFile(dc.Package)
+
+	fmt.Println("*", dc.Imports)
+
+	for imp, url := range dc.Imports {
+		f.ImportName(url, imp)
+	}
 
 	nonaggres := make(map[string]NonAggregateDTO)
 
@@ -100,6 +106,8 @@ func GenerateDomainMappers(dc *DomainConfig) {
 					rettype = rettype.Op("*")
 				}
 
+				fmt.Println("**", dfield.Name, dfield.Type.Package, dfield.Type.Type)
+
 				if rettype != nil {
 					rettype = rettype.Qual(dfield.Type.Package, dfield.Type.Type)
 				} else {
@@ -130,7 +138,7 @@ func GenerateDomainMappers(dc *DomainConfig) {
 				fieldPkg = ""
 			}
 
-			outputId := "o"
+			outputId := "output"
 
 			mapFromVal := Id(outputId).Dot(field.Name)
 			mapToVal := Id(firstLetter).Dot(field.MappingTo)
@@ -201,7 +209,7 @@ func GenerateDomainMappers(dc *DomainConfig) {
 
 				mToMapping := For(
 					Id("i").Op(":=").Lit(0),
-					Id("i").Op("<").Len(Id(firstLetter).Dot(field.Name)),
+					Id("i").Op("<").Len(Id(firstLetter).Dot(field.Name).Call()),
 					Id("i").Op("++"),
 				).Block(
 					Id(name).Index(Id("i")).Op("=").Id(field.Type.Type + dc.DTOSuffix).Values(
@@ -210,6 +218,10 @@ func GenerateDomainMappers(dc *DomainConfig) {
 						),
 					),
 				)
+
+				fmt.Printf("%#v\n", nonagg.MapToDict(
+					Id(firstLetter).Dot(field.MappingTo).Index(Id("i")),
+				))
 
 				mapToInnerMapping = append(mapToInnerMapping, mTo)
 				mapToInnerMapping = append(mapToInnerMapping, mToMapping)
@@ -237,19 +249,23 @@ func GenerateDomainMappers(dc *DomainConfig) {
 			f.Type().Id(dtoName).Struct(fields...)
 		}
 
+		for _, g := range getters {
+			f.Add(g)
+		}
+
 		if !dtoType.IsAggregateRoot {
 			continue
 		}
 
-		structMappingFrom := Id("d").Op(":=").Op("&").Id(dtoType.Type).Values(mapFromDict)
+		nName := firstLetter + dc.DTOSuffix[0:1]
+
+		structMappingFrom := Id(firstLetter).Op(":=").Op("&").Id(dtoType.Type).Values(mapFromDict)
 		mapFromInnerMapping = append(mapFromInnerMapping, structMappingFrom)
+		mapFromInnerMapping = append(mapFromInnerMapping, Return(Id(firstLetter)))
 
-		returnCode := Return(Id("d"))
-		mapFromInnerMapping = append(mapFromInnerMapping, returnCode)
-
-		structMappingTo := Id("d").Op(":=").Op("&").Id(dtoName).Values(mapToDict)
+		structMappingTo := Id(nName).Op(":=").Id(dtoName).Values(mapToDict)
 		mapToInnerMapping = append(mapToInnerMapping, structMappingTo)
-		mapToInnerMapping = append(mapToInnerMapping, returnCode)
+		mapToInnerMapping = append(mapToInnerMapping, Return(Id(nName)))
 
 		f.Func().Id(mapDomainFrom).Params(
 			Id("output").Id(dtoName),
@@ -263,11 +279,10 @@ func GenerateDomainMappers(dc *DomainConfig) {
 			mapToInnerMapping...,
 		)
 
-		for _, g := range getters {
-			f.Add(g)
-		}
-
 	}
 
 	fmt.Printf("%#v\n", f)
+
+	ioutil.WriteFile(fp, []byte(fmt.Sprintf("%#v\n", f)), 0644)
+
 }

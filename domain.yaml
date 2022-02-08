@@ -1,7 +1,9 @@
 
-dir: .
-package: menu 
-filename: mapping_gen
+dir: ./domain
+package: domain 
+filename: mapping_gen.go
+imports:
+    uuid: "github.com/satori/go.uuid"
 domain_types:
     RestaurantThumbnail:
         file: "domain/restaurant.go"
